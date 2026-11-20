@@ -1,2 +1,2 @@
 # 初始化结构
-SQLAlchemy metadata.create_all首次建users、log_sets、crash_cases、recoveries、audits。log_sets.name、crash_cases.name唯一，关联使用外键，入队冻结日志和崩溃点快照。暂无在线schema升级器。
+SQLAlchemy metadata.create_all首次建users、log_sets、crash_cases、recoveries、audits、sample_points、purge_jobs（保留期限清理）。log_sets.name、crash_cases.name唯一，关联使用外键，入队冻结日志和崩溃点快照。log_sets.redacted_points记录已清理采样点；purge_jobs.steps_done记录已提交的清理单元，供中断续跑。种子与启动时backfill为已有日志集补齐sample_points。暂无在线schema升级器。

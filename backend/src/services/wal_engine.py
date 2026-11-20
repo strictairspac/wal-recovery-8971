@@ -18,6 +18,10 @@ def validate(initial,records):
             active[tx]=[];used.add(tx)
         elif op=='write':
             if tx not in active:raise ValueError(f'LSN {lsn}: 写入事务尚未begin')
+            if r.get('redacted'):
+                # Purged sampling point: the reading is gone but the log position,
+                # transaction and any lock ordering it carried must survive.
+                active[tx].append(None);continue
             key=r.get('key');value=r.get('value')
             if key not in initial:raise ValueError(f'LSN {lsn}: 写入键必须存在于初始账本')
             if isinstance(value,bool) or not isinstance(value,int) or abs(value)>1000000000:raise ValueError(f'LSN {lsn}: 数值超限')
@@ -26,7 +30,8 @@ def validate(initial,records):
         elif op in ('commit','abort'):
             if tx not in active:raise ValueError(f'LSN {lsn}: 事务未开启或已结束')
             if op=='abort':
-                for key,before in reversed(active[tx]):state[key]=before
+                for entry in reversed(active[tx]):
+                    if entry is not None:state[entry[0]]=entry[1]
             del active[tx]
             locks={k:v for k,v in locks.items() if v!=tx}
         else:raise ValueError(f'LSN {lsn}: 未知操作')
@@ -40,11 +45,15 @@ def recover(initial,records,crash_after):
         op=r['op'];tx=r.get('tx')
         if op=='begin':active[tx]=[]
         elif op=='write':
+            if r.get('redacted'):
+                # Purged reading: keep the log position, drop the payload.
+                active[tx].append(None);continue
             row={'lsn':lsn,'tx':tx,'key':r['key'],'before':state[r['key']],'after':r['value']}
             active[tx].append(row);writes.append(row);state[r['key']]=r['value']
             trace.append(dict(row,phase='redo'))
         elif op=='abort':
             for row in reversed(active[tx]):
+                if row is None:continue
                 state[row['key']]=row['before'];trace.append(dict(row,phase='redo_abort_undo'))
             del active[tx];aborted.append(tx)
         elif op=='commit':winners.append(tx);del active[tx]
@@ -53,7 +62,7 @@ def recover(initial,records,crash_after):
     # Simulated crash durable pages are exactly the last quiescent checkpoint.
     # Recovery repeats history after that point, then undoes all unfinished writes.
     before_undo=copy.deepcopy(state);losers=sorted(active)
-    undo=sorted([w for tx in active for w in active[tx]],key=lambda w:w['lsn'],reverse=True)
+    undo=sorted([w for tx in active for w in active[tx] if w is not None],key=lambda w:w['lsn'],reverse=True)
     for row in undo:
         state[row['key']]=row['before'];trace.append(dict(row,phase='undo_loser'))
     # Independent winner-only oracle from durable checkpoint excludes aborted/unfinished transactions.

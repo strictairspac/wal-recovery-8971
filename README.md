@@ -26,6 +26,16 @@ SEED_DEMO=true时启动自动执行种子；自然键查重，不覆盖用户修
 ## 一天的复核剧本
 09:00操作员登录；09:05查看海砾采样账本-晚班（A100、B50）；09:10复制日志集保存shift-20261117；09:15在第10条日志后注入断电点；09:20提交恢复；09:25核对检查点LSN4、已提交T3、未提交T2两条写入逆序撤销，最终A60/B50；09:30下载JSON；09:40观察员核对且写操作403；10:00管理员查看/api/audits。
 
+## 采样点保留期限清理
+日志集初始账本中的每个键对应一个采样点（`sample_points`），带 `retain_until` 保留期限。值班人在“05 采样点清理”页核对过期点并受理清理（`POST /purges`，操作员/管理员；观察员只读）。
+
+- **受理即隐去**：`purging` 状态一落库，该点立即从日志集账本、旧恢复报告的账本/轨迹、导出 JSON 中消失，其余采样点照常演练和下载。
+- **三步分步清理**：`redact_logs`（原日志）→ `redact_snapshots`（排队快照）→ `redact_results`（已存报告）。每步连同 `steps_done` 标记单独提交，worker 崩溃后从第一个未提交的步骤续跑；重复执行幂等。
+- **不写回**：与清理并发的恢复任务即使晚完成，落库前也会按当时隐藏点再擦除一次（`worker.persist_recovery`），不会把过期读数写回结果。
+- **原断电位置照用**：日志中的 write 被替换为保留 LSN 的 `redacted` 标记而不是删除，所以所有 `crash_after` 崩溃点与其余点的恢复值都不变；WAL 引擎把 `redacted` 写入视作无载荷占位，不影响写锁、撤销顺序或重做/撤销计数以外的结果。
+- **可核对**：`GET /sample-points` 列出期限/状态，`GET /purges`、`GET /purges/{id}` 给出 `progress`（如 `2/3`）、`remaining_step` 与 `remaining_ledger`（其余读数），页面同步展示。
+- 清理后报告的 `input_sha256` 置空并标记 `hashes_invalidated`，原始摘要留痕于 `result_sha256_before_redaction`；`result_sha256` 按剩余账本重算。
+
 ## 算法、格式和失败态
 日志为JSON数组，操作为begin/write/commit/abort/checkpoint；write包含tx/key/value，其他事务操作包含tx，checkpoint不带tx。键必须在初始整数账本存在。事务ID不可复用；严格写锁直到commit/abort释放，同键重叠活动事务拒绝；检查点仅在无活动事务时允许。最多200条日志/30键/整数绝对值不超过10亿。
 
@@ -38,4 +48,4 @@ crash_after=N表示前N条日志已持久化。最近静止检查点保存全部
 
 环境COMPOSE_PROJECT_NAME控制命名，FRONTEND_PORT/BACKEND_PORT/DB_PORT为18246/19246/17746，DB_PASSWORD控制演示数据库密码，JWT_SECRET签名密钥，SEED_DEMO控制种子。命名卷db-data/redis-data/artifacts；共享artifacts预留，导出由冻结快照即时生成。Google Fonts需外网，业务离线可运行。默认凭据仅本地演示。
 
-共享枚举roles与任务states定义于backend/src/constants/enums.py、frontend/src/constants/enums.js，状态使用models/entities.py/services/recovery_service.py/worker.py/components/common/status.js；日志操作类型在schemas/log_set.py和pages/logs.js中声明/说明。MIT许可。真实验证见批次test-artifacts/gb-4107/TESTING.md。
+共享枚举roles与任务states定义于backend/src/constants/enums.py、frontend/src/constants/enums.js，状态使用models/entities.py/services/recovery_service.py/worker.py/components/common/status.js；日志操作类型在schemas/log_set.py和pages/logs.js中声明/说明。MIT许可。真实验证见批次test-artifacts/gb-4107/TESTING.md。保留期限与清理见上文“采样点保留期限清理”。
